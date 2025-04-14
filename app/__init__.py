@@ -2,55 +2,40 @@ from datetime import datetime
 import os
 
 from flask import Flask
-from flask_script import Manager
-from flask_sqlalchemy import SQLAlchemy
-from flask_mail import Mail
-from flask_migrate import Migrate, MigrateCommand
-from flask_user import UserManager
-from flask_wtf.csrf import CSRFProtect
-
-
-# Instantiate Flask extensions
-csrf_protect = CSRFProtect()
-db = SQLAlchemy()
-mail = Mail()
-migrate = Migrate()
+from app.extensions import db, mail, migrate, csrf_protect, login_manager
 
 # Initialize Flask Application
 def create_app(extra_config_settings={}):
     """Create and configure the Flask application."""
 
-    # Instantiate Flask
+    # Create Flask app
     app = Flask(__name__)
 
-    # Load base and environment-specific settings
-    app.config.from_object('app.settings')        # Load default/base config
-    app.config.from_object('app.env_settings')    # Load local overrides (email, DB, etc.)
-    app.config.update(extra_config_settings)      # Any extras passed in programmatically
+    # Load configuration
+    app.config.from_object('app.settings')
+    app.config.from_object('app.env_settings')
+    app.config.update(extra_config_settings)
 
-    # Setup all Flask extensions
+    # Initialize extensions
     db.init_app(app)
-    migrate.init_app(app, db)
     mail.init_app(app)
+    migrate.init_app(app, db)
     csrf_protect.init_app(app)
+    login_manager.init_app(app)
+    login_manager.login_view = 'auth.login'
 
-    # Register app blueprints (routes/views)
+    # Import models here AFTER db is initialized to avoid circular imports
+    from app.models.user_models import User
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        return User.query.get(int(user_id))
+
+    # Register blueprints
     from .views import register_blueprints
     register_blueprints(app)
 
-    # Add support for detecting hidden form fields in templates
-    from wtforms.fields import HiddenField
-    app.jinja_env.globals['bootstrap_is_hidden_field'] = lambda field: isinstance(field, HiddenField)
-
-    # Setup Flask-User for account management
-    from .models.user_models import User
-    user_manager = UserManager(app, db, User)
-
-    @app.context_processor
-    def context_processor():
-        return dict(user_manager=user_manager)
-
-    # Setup error email logging (only if app.config.ADMINS is set)
+    # Setup error email logging
     init_email_error_handler(app)
 
     return app
@@ -59,10 +44,10 @@ def create_app(extra_config_settings={}):
 def init_email_error_handler(app):
     """Configure logging to send emails for unhandled exceptions (only in production)."""
     if app.debug:
-        return  # Don’t send emails during development
+        return
 
     if not app.config.get('ADMINS'):
-        return  # No admins defined to send to
+        return
 
     try:
         import logging
